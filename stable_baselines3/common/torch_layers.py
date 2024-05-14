@@ -81,7 +81,11 @@ class PreTrainedVisionExtractor(BaseFeaturesExtractor):
             observation_space, check_channels=False, normalized_image=normalized_image
         ), f"You should use PreTrainedVisionExtractor only with images not with {observation_space}."
         super().__init__(observation_space, features_dim)
-
+        
+        # TODO:
+        # 1. Freeze FE
+        # 2. Solve problems with stacking images (how to integrate it? more channels dosent work)
+        # 3. RuntimeError: mat1 and mat2 shapes cannot be multiplied (4096x3 and 2048x512)
         self.feature_extractor = self._prepare_feature_extractor(model_name, weights_id, cut_layer)
 
         # Taken from NatureCNN class
@@ -89,6 +93,8 @@ class PreTrainedVisionExtractor(BaseFeaturesExtractor):
         with th.no_grad():
             n_flatten = self.feature_extractor(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
         self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+        self.feature_extractor.eval()
+        self.linear.eval()
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.linear(self.feature_extractor(observations))
