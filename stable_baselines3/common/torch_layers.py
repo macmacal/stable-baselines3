@@ -96,7 +96,7 @@ class PreTrainedVisionExtractor(BaseFeaturesExtractor):
     def _import_torchvision(self):
         try:
             self._thvision = __import__("torchvision")
-        except ImportError as e:
+        except ImportError:
             raise ImportError(
                 "Can't use PreTrainedVisionExtractor without torchvision. Please install it (`pip install torchvision`)."
             )
