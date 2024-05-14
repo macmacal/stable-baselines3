@@ -1,4 +1,5 @@
 from typing import Dict, List, Tuple, Type, Union
+from collections import OrderedDict
 
 import gymnasium as gym
 import torch as th
@@ -43,6 +44,84 @@ class FlattenExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.flatten(observations)
+
+
+class PreTrainedVisionExtractor(BaseFeaturesExtractor):
+    """
+    Load pre-trained model from torchvision library as feature extractor.
+    List of avaiable models: https://pytorch.org/vision/main/models.html
+
+    :param observation_space:
+    :param features_dim: Number of features extracted.
+        This corresponds to the number of unit for the last layer.
+    :param normalized_image: Whether to assume that the image is already normalized
+        or not (this disables dtype and bounds checks): when True, it only checks that
+        the space is a Box and has 3 dimensions.
+        Otherwise, it checks that it has expected dtype (uint8) and bounds (values in [0, 255]).
+    :param model_name: the name of the model in the PascalCase format.
+    :param weights_id: the name of the trained weights (torchvision API).
+    :param cut_layer: the name of the layer to cut the head from the backbone.
+    """
+
+    def __init__(
+        self,
+        observation_space: gym.Space,
+        features_dim: int = 512,
+        normalized_image: bool = False,
+        model_name: str = None,
+        weights_id: str | None = None,
+        cut_layer: str = None,
+    ):
+        self._import_torchvision()
+        assert isinstance(observation_space, spaces.Box), (
+            "PreTrainedVisionExtractor must be used with a gym.spaces.Box ",
+            f"observation space, not {observation_space}",
+        )
+        assert is_image_space(
+            observation_space, check_channels=False, normalized_image=normalized_image
+        ), f"You should use PreTrainedVisionExtractor only with images not with {observation_space}."
+        super().__init__(observation_space, features_dim)
+
+        self.feature_extractor = self._prepare_feature_extractor(model_name, weights_id, cut_layer)
+
+        # Taken from NatureCNN class
+        # Compute shape by doing one forward pass
+        with th.no_grad():
+            n_flatten = self.feature_extractor(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
+        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+
+    def forward(self, observations: th.Tensor) -> th.Tensor:
+        return self.linear(self.feature_extractor(observations))
+
+    def _import_torchvision(self):
+        try:
+            self._thvision = __import__("torchvision")
+        except ImportError as e:
+            raise ImportError(
+                "Can't use PreTrainedVisionExtractor without torchvision. Please install it (`pip install torchvision`)."
+            )
+
+    def _prepare_feature_extractor(self, model_name: str, weights_id: str | None = None, cut_layer: str = None):
+        pretrained_model = self._load_vision_model(model_name, weights_id)
+        return self._cut_head_layers(pretrained_model, cut_layer)
+
+    def _load_vision_model(self, model_name: str, weights_id: str | None = None) -> nn.Module:
+        try:
+            weights = weights_id if weights_id is None else self._thvision.models.get_weight(weights_id)
+            return self._thvision.get_model(model_name, weights=weights)
+        except ValueError as e:
+            raise ValueError(
+                f"{e}.\nFailed to load the '{model_name}' model with '{weights_id}' weights. Ensure that the name is in "
+                f"the PascalCase format and it is listed in https://pytorch.org/vision/main/models.html."
+            )
+
+    def _cut_head_layers(self, model: nn.Module, cut_layer: str) -> nn.Module:
+        layers = OrderedDict()
+        for layer_name, layer in model.named_children():
+            if layer_name == cut_layer:
+                break
+            layers[layer_name] = layer
+        return nn.Sequential(layers)
 
 
 class NatureCNN(BaseFeaturesExtractor):
